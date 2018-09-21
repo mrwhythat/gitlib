@@ -1,0 +1,125 @@
+#! /usr/bin/env python3
+
+import argparse
+import requests
+
+from os import path
+
+
+# ------------------------------------------------------------------------------
+# CLI implementation
+description = """
+Library manager for automating boring tasks that uses git repository as a
+library with metadata stored in commit objects.
+"""
+
+cli = argparse.ArgumentParser('libman', description=description)
+subparsers = cli.add_subparsers(dest='subcommand', title='commands')
+
+
+def subcommand(*args):
+    """Register a function as a subcommand with given arguments"""
+    def decorator(f):
+        parser = subparsers.add_parser(f.__name__, help=f.__doc__)
+        for arg in args:
+            parser.add_argument(*arg[0], **arg[1])
+        parser.set_defaults(func=f)
+    return decorator
+
+
+def arg(*args, **kwargs):
+    """Construct argument description from a args/kwargs"""
+    return (list(args), kwargs)
+
+
+# ------------------------------------------------------------------------------
+# Commands
+@subcommand(arg('-f', '--file', help='File to add to the library'))
+def add(args):
+    """Add a new file to the library"""
+    print('not implemented')
+
+
+@subcommand(arg('-f', '--file', help='Name-normalized book file to lookup'),
+            arg('-t', '--title', help='Title of the book to lookup'),
+            arg('-a', '--author', help='Author name to lookup'),
+            arg('-y', '--year', help='Year of publication to lookup'),
+            arg('-c', '--commit', action='store_true',
+                help='Format book info as a commit message'))
+def info(args):
+    """Lookup given book info on the known book resources"""
+    argmap = vars(args)
+    if argmap.get('file'):
+        t, a, y = parse_filename(argmap['file'])
+    else:
+        t, a, y = (argmap.get(x) for x in ('title', 'author', 'year'))
+    title, description = LookupEngine().info(t, a, y)[0]
+    format_string = '[BOOK] {}\n\n{}' if args.commit else 'title:     {}\n{}'
+    print(format_string.format(title, description))
+
+
+@subcommand(arg('file', help='Filename to use as a lookup seed'))
+def lookup(args):
+    """Lookup possible entries for a given book file"""
+    argmap = vars(args)
+    entries = LookupEngine().lookup(argmap['file'])
+    for title, description in entries:
+        print('title:     {}\n{}\n'.format(title, description))
+
+
+# -------------------------------------------------------------------------------
+# Libman logic
+def parse_filename(filename):
+    title, author, year = path.splitext(path.basename(filename))[0].split('_')
+    return title.replace('-', ' '), author, year
+
+
+class NotFoundError(Exception):
+
+    """Error class for signalling book was not found"""
+
+    def __init__(self, title, author=None, year=None):
+        title_desc = "No books found for '{}'".format(title)
+        author_desc = "" if author is None else " (author: {})".format(author)
+        Exception.__init__(self, title_desc + author_desc)
+        self.title, self.author, self.year = title, author, year
+
+
+class LookupEngine:
+
+    def __init__(self):
+        self.base = 'http://openlibrary.org/search.json'
+
+    def format_results(self, resp):
+        keys = ('author_name', 'isbn', 'publish_year', 'publisher')
+        return [(book['title_suggest'], '\n'.join([
+            'author:    {}'.format(', '.join(book['author_name'])),
+            'publisher: {}'.format(book['publisher'][0]),
+            'ISBN:      {}'.format(book['isbn'][0]),
+            'year:      {}'.format(book['publish_year'][0])
+        ])) for book in resp.json()['docs'] if all(k in book for k in keys)]
+
+    def lookup(self, query):
+        resp = requests.get(self.base, {'q': query})
+        if int(resp.json()['num_found']) == 0:
+            raise NotFoundError(query)
+        return self.format_results(resp)
+
+    def info(self, title, author=None, year=None):
+        params = {'title': title}
+        if author is not None:
+            params['author'] = author
+        resp = requests.get(self.base, params)
+        if int(resp.json()['num_found']) == 0:
+            raise NotFoundError(title, author, year)
+        return self.format_results(resp)
+
+
+# ------------------------------------------------------------------------------
+# main
+if __name__ == "__main__":
+    args = cli.parse_args()
+    if args.subcommand is None:
+        cli.print_help()
+    else:
+        args.func(args)
