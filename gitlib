@@ -88,13 +88,41 @@ def info(args):
     print(format_string.format(title, description))
 
 
-@subcommand(arg('file', help='Filename to use as a lookup seed'))
+@subcommand(arg('phrase', help='Phrase to use as a lookup seed'),
+            arg('-e', '--entries', help='Number of entries to display'))
 def lookup(args):
     """Lookup possible entries for a given book file"""
     argmap = vars(args)
-    entries = LookupEngine().lookup(argmap['file'])
-    for title, description in entries:
+    entries = LookupEngine().lookup(argmap['phrase'])
+    enum = argmap.get('entries')
+    if enum is None:
+        enum = len(entries)
+    for title, description in entries[:int(enum)]:
         print('title:     {}\n{}\n'.format(title, description))
+
+
+@subcommand(arg('file', help='Filename to rename'),
+            arg('-l', '--lookup', help='Lookup phrase to search for'),
+            arg('-t', '--title', help='Title of the book to lookup'),
+            arg('-a', '--author', help='Author name to lookup'),
+            arg('-y', '--year', help='Year of publication to lookup'))
+def rename(args):
+    """Print normalized file name using lookup info"""
+    argmap = vars(args)
+    engine, lookup_phrase = LookupEngine(), argmap.get('lookup')
+    if lookup_phrase is None:
+        t, a, y = (argmap.get(x) for x in ('title', 'author', 'year'))
+        info = engine.info(t, a, y, raw=True)[0]
+    else:
+        info = engine.lookup(lookup_phrase, raw=True)[0]
+    file = argmap.get('file')
+    name = '{}_{}_{}{}'.format(
+        '-'.join(info['title_suggest'].split(' ')),
+        info['author_name'][0].split(' ')[-1],
+        info['publish_year'][0],
+        path.splitext(file)[1]
+    ).lower()
+    print(name)
 
 
 # -------------------------------------------------------------------------------
@@ -129,20 +157,20 @@ class LookupEngine:
             'year:      {}'.format(book['publish_year'][0])
         ])) for book in resp.json()['docs'] if all(k in book for k in keys)]
 
-    def lookup(self, query):
+    def lookup(self, query, raw=False):
         resp = requests.get(self.base, {'q': query})
         if int(resp.json()['num_found']) == 0:
             raise NotFoundError(query)
-        return self.format_results(resp)
+        return self.format_results(resp) if not raw else resp.json()['docs']
 
-    def info(self, title, author=None, year=None):
+    def info(self, title, author=None, year=None, raw=False):
         params = {'title': title}
         if author is not None:
             params['author'] = author
         resp = requests.get(self.base, params)
         if int(resp.json()['num_found']) == 0:
             raise NotFoundError(title, author, year)
-        return self.format_results(resp)
+        return self.format_results(resp) if not raw else resp.json()['docs']
 
 
 # ------------------------------------------------------------------------------
